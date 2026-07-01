@@ -2,24 +2,117 @@ import React, { useState } from 'react';
 import { X, Loader2 } from 'lucide-react';
 
 const PaymentModal = ({ isOpen, onClose, product }) => {
-  const [loading, setLoading] = useState({ esewa: false, khalti: false });
+  const [loading, setLoading] = useState({ esewa: false, khalti: false, cod: false });
   
   if (!isOpen || !product) return null;
 
   const BACKEND_URL = 'http://localhost:8080';
 
-  const handleKhalti = async () => {
-    setLoading(prev => ({ ...prev, khalti: true }));
+  const getToken = () => {
+    return localStorage.getItem('token') 
+      || localStorage.getItem('jwt') 
+      || localStorage.getItem('authToken')
+      || '';
+  };
+
+  const handleEsewa = async () => {
+    setLoading(prev => ({ ...prev, esewa: true }));
     try {
-      const amount = parseInt(product.price.replace(/[₹,.]/g, ''));
-      
-      const response = await fetch(`${BACKEND_URL}/api/payment/khalti/initiate`, {
+      const amount = parseFloat(product.price.replace(/[^0-9.]/g, ''));
+      if (isNaN(amount) || amount <= 0) throw new Error('Invalid amount');
+
+      const token = getToken();
+      if (!token) {
+        alert('Please login first!');
+        setLoading(prev => ({ ...prev, esewa: false }));
+        return;
+      }
+
+      console.log('Initiating eSewa payment...');
+
+      const response = await fetch(`${BACKEND_URL}/api/payment/esewa/initiate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({
           amount,
           productName: product.name,
-          productId: product.id,
+          productId: product.id || product._id,
+        }),
+      });
+
+      const data = await response.json();
+      console.log('Backend response:', data);
+      
+      if (!response.ok) {
+        throw new Error(data.message || data.error || `Server error: ${response.status}`);
+      }
+
+      if (!data.success || !data.payload) {
+        throw new Error(data.message || 'Failed to initiate payment');
+      }
+
+      // Create form and submit to eSewa
+      const form = document.createElement('form');
+      form.method = 'POST';
+      form.action = data.esewa_url;
+      form.target = '_self'; // Important: submit in same window
+      form.style.display = 'none';
+
+      const payload = data.payload;
+      
+      Object.entries(payload).forEach(([key, value]) => {
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = key;
+        input.value = String(value);
+        form.appendChild(input);
+      });
+
+      document.body.appendChild(form);
+      
+      console.log('Submitting to eSewa:', data.esewa_url);
+      console.log('Payload:', payload);
+      
+      // Small delay to ensure form is in DOM
+      setTimeout(() => {
+        form.submit();
+        // Clean up form after submission
+        setTimeout(() => {
+          if (form.parentNode) form.parentNode.removeChild(form);
+        }, 1000);
+      }, 100);
+      
+    } catch (error) {
+      console.error('eSewa Error:', error);
+      alert('eSewa Error: ' + error.message);
+      setLoading(prev => ({ ...prev, esewa: false }));
+    }
+  };
+
+  const handleKhalti = async () => {
+    setLoading(prev => ({ ...prev, khalti: true }));
+    try {
+      const amount = parseFloat(product.price.replace(/[^0-9.]/g, ''));
+      const token = getToken();
+      if (!token) {
+        alert('Please login first!');
+        setLoading(prev => ({ ...prev, khalti: false }));
+        return;
+      }
+
+      const response = await fetch(`${BACKEND_URL}/api/payment/khalti/initiate`, {
+        method: 'POST',
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
+        body: JSON.stringify({
+          amount,
+          productName: product.name,
+          productId: product.id || product._id,
         }),
       });
 
@@ -30,54 +123,49 @@ const PaymentModal = ({ isOpen, onClose, product }) => {
         alert('Payment initiation failed: ' + (data.message || 'Unknown error'));
       }
     } catch (error) {
+      console.error('Khalti Error:', error);
       alert('Error: ' + error.message);
     } finally {
       setLoading(prev => ({ ...prev, khalti: false }));
     }
   };
 
-  const handleEsewa = async () => {
-    setLoading(prev => ({ ...prev, esewa: true }));
+  const handleCOD = async () => {
+    setLoading(prev => ({ ...prev, cod: true }));
     try {
-      const amount = parseInt(product.price.replace(/[₹,.]/g, ''));
-      
-      const response = await fetch(`${BACKEND_URL}/api/payment/esewa/initiate`, {
+      const amount = parseFloat(product.price.replace(/[^0-9.]/g, ''));
+      const token = getToken();
+      if (!token) {
+        alert('Please login first!');
+        setLoading(prev => ({ ...prev, cod: false }));
+        return;
+      }
+
+      const response = await fetch(`${BACKEND_URL}/api/payment/cod/initiate`, {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          'Authorization': `Bearer ${token}`
+        },
         body: JSON.stringify({
           amount,
           productName: product.name,
-          productId: product.id,
+          productId: product.id || product._id,
         }),
       });
 
       const data = await response.json();
       
-      if (!data.success || !data.payload) {
-        throw new Error(data.message || 'Invalid response from server');
+      if (data.success) {
+        window.location.href = `/payment/success?method=cod&transaction_id=${data.transactionId}`;
+      } else {
+        alert('COD order failed: ' + (data.message || 'Unknown error'));
       }
-
-      // Create and submit form to eSewa
-      const form = document.createElement('form');
-      form.method = 'POST';
-      form.action = data.esewa_url || 'https://rc-epay.esewa.com.np/api/epay/main/v2/form';
-
-      Object.entries(data.payload).forEach(([key, value]) => {
-        const input = document.createElement('input');
-        input.type = 'hidden';
-        input.name = key;
-        input.value = String(value);
-        form.appendChild(input);
-      });
-
-      document.body.appendChild(form);
-      form.submit();
-      document.body.removeChild(form);
-      
     } catch (error) {
-      alert('eSewa Error: ' + error.message);
+      console.error('COD Error:', error);
+      alert('COD Error: ' + error.message);
     } finally {
-      setLoading(prev => ({ ...prev, esewa: false }));
+      setLoading(prev => ({ ...prev, cod: false }));
     }
   };
 
@@ -108,6 +196,14 @@ const PaymentModal = ({ isOpen, onClose, product }) => {
           >
             {loading.khalti ? <Loader2 size={18} className="spin" /> : <span>💳</span>}
             {loading.khalti ? 'Redirecting...' : 'Khalti'}
+          </button>
+          <button 
+            className="payment-option cod" 
+            onClick={handleCOD}
+            disabled={loading.cod}
+          >
+            {loading.cod ? <Loader2 size={18} className="spin" /> : <span>💵</span>}
+            {loading.cod ? 'Processing...' : 'Cash on Delivery'}
           </button>
         </div>
       </div>
@@ -196,6 +292,11 @@ const PaymentModal = ({ isOpen, onClose, product }) => {
           background: #5c2d91;
           color: white;
           border-color: #5c2d91;
+        }
+        .payment-option.cod:hover:not(:disabled) {
+          background: #f59e0b;
+          color: white;
+          border-color: #f59e0b;
         }
         @keyframes spin {
           to { transform: rotate(360deg); }
